@@ -1,0 +1,252 @@
+#!/bin/bash
+set -e
+
+export HUMDRUMMER_VERSION=0.0.2
+if [ $# -eq 1 ]; then if [ $1 == "--version" ]; then echo "HumDrummer version ${HUMDRUMMER_VERSION}, 20220912" ; exit ; fi ; fi
+
+SCRIPTDIR=$( dirname $0 )
+export PERL5LIB=${SCRIPTDIR}/third_party/humming
+export HUMMING=${SCRIPTDIR}/third_party/humming
+export GFF3SORT=${SCRIPTDIR}/third_party/gff3sort/gff3sort.pl
+export COLLAPSE=${SCRIPTDIR}/utils/collapse.py
+export MINIMAP2=${SCRIPTDIR}/third_party/minimap2/minimap2
+
+
+
+function help {
+  echo "
+ ##    ##   ##    ##   ##        ##   ## ##       ## ##      ##    ##   ##        ##   ##        ##   ## ## ##    ## ##    
+ ##    ##   ##    ##   ## ##  ## ##   ##    ##    ##   ##    ##    ##   ## ##  ## ##   ## ##  ## ##   ##          ##   ##  
+ ## ## ##   ##    ##   ##   ##   ##   ##     ##   ## ##      ##    ##   ##   ##   ##   ##   ##   ##   ## ## ##    ## ##    
+ ##    ##   ##    ##   ##        ##   ##    ##    ##  ##     ##    ##   ##        ##   ##        ##   ##          ##   ##   
+ ##    ##   ## ## ##   ##        ##   ## ##       ##    ##   ## ## ##   ##        ##   ##        ##   ## ## ##    ##    ##  
+ ==    ==   == == ==   ==        ==   == ==       ==    ==   == == ==   ==        ==   ==        ==   == == ==    ==    ==    
+ ==    ==   ==    ==   ==        ==   ==    ==    ==  ==     ==    ==   ==        ==   ==        ==   ==          ==   ==  
+ == == ==   ==    ==   ==   ==   ==   ==     ==   == ==      ==    ==   ==   ==   ==   ==   ==   ==   == == ==    == ==    
+ ==    ==   ==    ==   == ==  == ==   ==    ==    ==   ==    ==    ==   == ==  == ==   == ==  == ==   ==          ==   ==   
+ ==    ==   ==    ==   ==        ==   == ==       == ==      ==    ==   ==        ==   ==        ==   == == ==    == ==  
+
+
+	HumDrummer ${HUMDRUMMER_VERSION}
+
+	Usage:
+
+	If you already have the transcript alignments in PAF format:
+		humdrummer -i /path/to/alignments.paf [-z] [-l] [-m]
+
+	If you have transcript FASTA (and genome FASTA):
+		humdrummer -t /path/to/transcripts.fasta -g /path/to/genome.fasta [-z] [-l] [-m]
+
+
+
+	Options:
+
+	-i	PAFMODE : Input PAF. Typically full-length transcripts aligned to a genome with Minimap2 (see example below). 
+			  Can be any PAF though (e.g. long reads).
+			  Not compatible with -t/-g.
+	-t	FULLMODE: Transcript (query) sequences in FASTA format. Also need -g. Do not use -i.
+	-g	FULLMODE: Genome (target/subject/reference) sequence in FASTA format. Also need -t. Do not use -i.
+	-z	Optional. Save intermediate files.
+	-l	Optional. Assume given transcript/query sequences are low quality. Tells minimap2 to use splice, not splice:hq.
+	-m	Optional. Provide /Path/to/desired/minimap2. Use \"which\" to find it in env.
+
+
+
+	Pipeline notes:
+	- Minimap2 alignments of high quality transcript sequences.
+		- minimap2 -y -c -x splice:hq genome.fasta transcripts.fasta > transcripts.paf
+			- <y> Copy input FASTA/Q comments to output.
+			- <c> Output CIGAR in PAF; also has the side-effect of improved alignments.
+			- <x> preset; use splice:hq for high-quality transcript sequences, and splice for lower quality sequences or those from another species.
+	- Hummdrummer outputs a GFF formatted such that the IGV genome browser shows the alignments as connected gene models to see gene structures.
+		- humdrummer -i transcripts.paf
+	
+
+	Use cases:
+	- Viewing transcript alignments as gene model structures in genome browsers:
+	- High quality transcripts may be from:
+		- De novo transcriptome assemblies.
+		- A previous genome annotation, or annotation on a different genome assembly version.
+		- High-accuracy long-read sequencing (PacBio-HiFi, Nanopore Q20/Q30).
+	- Lower quality transcript sequences may be from:
+		- Low quality transcriptome assemblies or sanger sequence reads
+		- Lower-accuracy long reads.
+		- High quality transcript sequences from a different species.
+		- An annotation from an error-prone genome assembly.
+	- Transcript alignment PAF files came from Minimap2 for the development of this script.
+		- One should be able to use other tools though, so long as it gives a proper PAF file.
+
+	Citation:
+	- This script was developed to convert Illumina-based Trinity de novo transcriptome assembly Minimap2 alignments ...
+		- ... to viewable gene models on various versions of the Bradysia coprophila genome (Bcop_v1, Bcop_v2, etc).
+	- It is free to use, further develop, criticize, etc.
+	- Feel free to cite this github repo if you find it helpful in your own research.
+
+
+
+	Output:
+		Default:	pre.gff	- Final sorted GFF with exon and transcript coordinates.
+		Default:	pre.paf			- If PAF made as part of humdrummer, then it is also saved.
+
+	Extra outputs with 'save intermediates' (-z) option:
+		[1]		pre_01-init.gff		- Output of humming.
+		[2]		pre_02-exons.gff	- Reformatted.
+		[3]		pre_03-transcripts.gff	- Extrapolated from exons.
+		[4]		pre_04-unsorted.gff	- Combined transcripts and exons before gff3sort.
+
+"
+}
+
+
+## HELP CATCH NO ARGS
+###################################################################################################################################################################################
+if [ $# -eq 0 ]; then help ; exit ; fi
+###################################################################################################################################################################################
+
+##############################################################################
+## DEFAULTS
+##############################################################################
+INPUT_PAF=""
+TYPETAG=mRNA
+TRANS=""
+REF=""
+CLEAN=true
+MINIMAP2=""
+HQ=true
+SPLICESFX=splicehq
+MM2PARAM=splice:hq
+
+FULLMODE=false
+PAFMODE=false
+
+HELP=false
+
+ALLVARS=""
+
+##############################################################################
+## GET OPTS
+##############################################################################
+while getopts "i:t:g:zlm:" arg; do
+    case $arg in
+        i) INPUT_PAF=${OPTARG} ; PAFMODE=true ;;
+	t) TRANS=${OPTARG} ; FULLMODE=true ;;
+	g) REF=${OPTARG} ; FULLMODE=true ;;
+	z) CLEAN=false ;; 
+	l) HQ=false ; SPLICESFX=splice ; MM2PARAM=splice ;;
+	m) if [ ${OPTARG} == "which" ]; then MINIMAP2=$( which minimap2 ); else MINIMAP2=${OPTARG} ; fi ;;
+        *) help; exit;;
+    esac
+done
+
+
+## HELP CATCHALL <<not nec code given above>>
+###################################################################################################################################################################################
+if [ $# -eq 0 ]; then help ; exit ; fi
+if $FULLMODE && $PAFMODE; then echo "Specify only either -i or -t/-g" ; help ; exit ; fi
+if $PAFMODE ; then if [ -z $INPUT_PAF ]; then echo "Something is wrong. Paf mode on, but not PAF found." ; help; exit ; fi ; fi
+if $FULLMODE ; then if [ -z $TRANS ] || [ -z $REF ] ; then echo "Something is wrong. Full mode on, but Transcript or Genome fasta not found." ; help; exit ; fi ; fi
+
+###################################################################################################################################################################################
+
+
+## VARIABLE FUDGING
+PAF=${INPUT_PAF}
+
+
+#GFF=humdrum-${PRE}.gff
+
+if $PAFMODE ; then
+  export PRE=$( basename ${PAF} .paf )
+  export PRE=humdrum-${PRE}-${SPLICESFX}
+elif $FULLMODE ; then
+  export PRE=$( basename ${TRANS} )
+  export PRE=${PRE/.fasta/}
+  export PRE=${PRE/.fa/}
+  export PRE=${PRE/.paf/}
+  export PRE=humdrum-${PRE}-${SPLICESFX}
+  export PAF=${PRE}.paf
+else
+  echo "DEBUG::: Something wrong in prefix section." ; exit
+fi
+
+export GFF=${PRE}.gff
+export INIT=${PRE}_01-init.gff
+export EXON=${PRE}_02-exons.gff
+export TBOUND=${PRE}_03-transcripts.gff
+export UNSORTED=${PRE}_04-unsorted.gff
+#export SORTED=${GFF}
+export SORTED=${PRE}_05-final-sorted.gff
+
+function cleanup { rm ${INIT} ${EXON} ${TBOUND} ${UNSORTED} ; }
+
+
+
+###################################################################################################################################################################################
+echo $PRE
+
+#if ( [ $# -eq 2 ] && [ $2 != "noclean" ] ) || [ $# -eq 3 ] ; then
+
+if $FULLMODE ; then
+  ## MAP TRANSCRIPTS WITH "MINIMAP2"; OUTPUT AS PAF
+  ## May consider --end-bonus parameter in the future.
+  ${MINIMAP2} -y -c -x ${MM2PARAM} ${REF} ${TRANS} > ${PAF} ;
+fi
+
+
+
+## CONVERT PAF TO GFF USING "HUMMING"
+echo convert PAF to GFF
+perl ${HUMMING}/convert.pl -i ${PAF} -f PAF -o ${INIT} -u GFF
+
+
+
+## REFORMAT THE HUMMING GFF IN A WAY THAT WILL ALLOW GENE MODEL STRUCTURE VISUALIZATION IN IGV (in future I may dev my own pyscript that goes from PAF to this; skips HUMMING).
+echo reformat that GFF
+awk 'OFS="\t" {a[$9]+=1; print $1,$2,$3,$4,$5,".",$7,$8,"ID="$9":exon:"a[$9]";Parent="$9}'  ${INIT} > ${EXON}
+
+
+
+## FIND LEFT AND RIGHT TRANSCRIPT BOUNDARIES TO ADD AS PARENT IN GFF; CREATE TEMP GFF
+echo Get transcript bounds
+cat <( ${COLLAPSE} -i ${INIT} -c 9 -c2 4 -o min --othercols 1,7 ) <( ${COLLAPSE} -i ${INIT} -c 9 -c2 5 -o max  --othercols 1,7 ) | sort -k1,1 -k3,3n | ${COLLAPSE} -i - -c 1 -c2 3 -o list --othercols 4,5 | awk 'OFS="\t" {gsub(",","\t"); print $5, "hum", "mRNA", int($3), int($4), ".", $NF, ".", "ID="$1}' | sort -k4,4n -k5,5n > ${TBOUND}
+
+
+## COMBINE GFF WITH TEMP GFF; CLEAN UP INTERMEDIATES
+echo Combine exon minimap alignments with transcript bounds.
+cat ${TBOUND} ${EXON} | sortBed -i - > ${UNSORTED}
+
+
+## SORT GFF with "gff3sort"
+echo Final Gff3 sorting.
+${GFF3SORT} ${UNSORTED} > ${SORTED}
+
+## CLEAN-UP
+if $CLEAN ; then cleanup ; fi
+
+
+
+#exit 0
+
+## NOTE:
+##	- 02-exons.gff is enough to get transcript model structures in IGV, so may not really need to go beyond this step.
+##	- 04-unsorted is just fine in IGV as well. So may not need to make gff3sort as a dependency...
+##	- Only benefit of finding left and right bounds of transcript's exons is to use them to extract the genomic coords of entire transcript including introns.
+
+## ALTERNATIVE APPROACH IN EARLY STEPS:
+#source  ~/software/conda/source-conda-for-scripts.sh
+#conda activate funannotate
+## MAP TRANSCRIPTS WITH MINIMAP2; OUTPUT AS SAM ; SORT WITH SAMTOOLS
+#${MINIMAP2} --cs=short -a -x splice:hq ${REF} ${TRANS} | samtools sort > tmp.bam
+
+## CONVERT BAM TO GFF3 WITH FUNANNOTATE UTILITY
+#funannotate util bam2gff3 -i tmp.bam -o ${PRE}-splicehq.gff
+
+
+
+
+
+
+#old
+#[-t <gff type>]
+#		-t	Optional. In output GFF, the type is \"mRNA\". You can change that with this option.
+
