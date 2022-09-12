@@ -1,3 +1,5 @@
+![logo](/utils/logo.png)
+
 # humdrummer
 Convert minimap2 transcript alignments to GFF gene models for pleasant viewing in genome browsers like IGV.
 
@@ -32,10 +34,10 @@ bash install.sh
 
 # Quick Start
 	If you already have the transcript alignments in PAF format:
-		`humdrummer -i /path/to/alignments.paf [-z] [-l] [-m]`
+		humdrummer -i /path/to/alignments.paf [-z] [-l] [-m]
 
 	If you have transcript FASTA (and genome FASTA):
-		`humdrummer -t /path/to/transcripts.fasta -g /path/to/genome.fasta [-z] [-l] [-m]`
+		humdrummer -t /path/to/transcripts.fasta -g /path/to/genome.fasta [-z] [-l] [-m]
 
 
 # Detailed Usage
