@@ -30,6 +30,8 @@ Bioinformatic pipeline to convert transcript alignments in PAF format to GFF gen
 - To install, simply do: 
 ```
 bash install.sh
+find . -name "*.pl" -exec chmod u+x {} \; 
+find . -name "*.py" -exec chmod u+x {} \; 
 ```
 - Installing Minimap2 is optional. 
 - However, note that HumDrummer looks to use the provided copy by default.
